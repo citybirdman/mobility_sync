@@ -137,13 +137,13 @@ app_license = "mit"
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+doc_events = {
+    "*": {
+        "after_insert": "mobility_sync.sync.handlers.handle_doc_event",
+        "on_update": "mobility_sync.sync.handlers.handle_doc_event",
+        "on_trash":   "mobility_sync.sync.handlers.handle_doc_event",
+    }
+}
 
 # Scheduled Tasks
 # ---------------
