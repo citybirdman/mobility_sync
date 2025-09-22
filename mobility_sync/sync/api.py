@@ -57,7 +57,7 @@ def setup_outgoing_client(client_name, redirect_uri):
     client = frappe.new_doc("OAuth Client")
     client.app_name = client_name
     client.client_type = "Confidential"
-    client.default_redirect_uri = redirect_uri
+    client.default_redirect_uri = redirect_uri + "/api/method/frappe.integrations.doctype.connected_app.connected_app.callback/" + client_name
     client.redirect_uris = redirect_uri
     client.insert(ignore_permissions=True)
 
