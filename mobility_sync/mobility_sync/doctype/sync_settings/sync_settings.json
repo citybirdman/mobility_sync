@@ -25,12 +25,6 @@
    "read_only": 1
   },
   {
-   "fieldname": "outgoing_client_secret",
-   "fieldtype": "Password",
-   "label": "Outgoing Client Secret",
-   "read_only": 1
-  },
-  {
    "fieldname": "outgoing_redirect_uri",
    "fieldtype": "Data",
    "label": "Outgoing Redirect Uri",
@@ -40,13 +34,19 @@
    "fieldname": "incoming_connected_app",
    "fieldtype": "Data",
    "label": "Connected App"
+  },
+  {
+   "fieldname": "outgoing_client_secret",
+   "fieldtype": "Data",
+   "label": "Outgoing Client Secret",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2025-09-22 18:52:35.147811",
+ "modified": "2025-09-22 22:37:52.540324",
  "modified_by": "Administrator",
  "module": "Mobility Sync",
  "name": "Sync Settings",

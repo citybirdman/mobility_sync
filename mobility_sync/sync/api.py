@@ -1,54 +1,60 @@
 import frappe
-# from frappe.oauth import get_oauth_server
-# from oauthlib.oauth2 import FatalClientError, OAuth2Error
 
-# @frappe.whitelist(allow_guest=True)
-# def receive_doc(doctype, name, method, data):
-#     """Receive synced doc from remote instance (OAuth2 protected)."""
+@frappe.whitelist(allow_guest=True)
+def receive_doc(doctype, name, doc_method, data):
+    """Validate OAuth2 Bearer token manually and sync doc."""
+    # 1. Extract token
+    method = doc_method
+    auth_header = frappe.get_request_header("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        frappe.throw("Missing or invalid Authorization header", frappe.PermissionError)
 
-#     # --- validate OAuth2 Bearer token ---
-#     try:
-#         oauth_server = get_oauth_server()
-#         valid, req = oauth_server.verify_request(
-#             frappe.request.method,
-#             frappe.request.url,
-#             frappe.request.headers
-#         )
-#         if not valid:
-#             frappe.local.response["http_status_code"] = 401
-#             return {"status": "error", "message": "Invalid or missing access token"}
-#     except (OAuth2Error, FatalClientError) as e:
-#         frappe.local.response["http_status_code"] = 401
-#         return {"status": "error", "message": f"OAuth2 validation failed: {str(e)}"}
+    token = auth_header.split(" ")[1]
 
-#     # --- apply the sync ---
-#     try:
-#         if method in ("after_insert", "on_update"):
-#             if frappe.db.exists(doctype, name):
-#                 doc = frappe.get_doc(doctype, name)
-#                 doc.update(data)
-#                 doc.flags.ignore_mandatory = True
-#                 doc.flags.ignore_permissions = True
-#                 doc.save()
-#             else:
-#                 new_doc = frappe.new_doc(doctype)
-#                 new_doc.update(data)
-#                 new_doc.flags.ignore_mandatory = True
-#                 new_doc.flags.ignore_permissions = True
-#                 new_doc.insert()
+    # 2. Check token in DB (Token Cache → OAuth Bearer Token doctype)
+    token_info = frappe.db.get_value(
+        "OAuth Bearer Token",
+        {"access_token": token, "status": "Active"},
+        ["client", "user", "scopes", "expires_in"],
+        as_dict=True
+    )
 
-#         elif method == "on_trash":
-#             if frappe.db.exists(doctype, name):
-#                 frappe.delete_doc(doctype, name, ignore_permissions=True, force=1)
+    if not token_info:
+        frappe.throw("Invalid or expired access token", frappe.PermissionError)
 
-#         frappe.db.commit()
-#         return {"status": "success", "message": f"{doctype} {name} synced via {method}"}
+    # 3. Optional: check expiry
+    from frappe.utils import now_datetime
+    if token_info.expires and token_info.expires < now_datetime():
+        frappe.throw("Access token expired", frappe.PermissionError)
 
-#     except Exception as e:
-#         frappe.db.rollback()
-#         frappe.log_error(frappe.get_traceback(), "Sync Receive Failed")
-#         frappe.local.response["http_status_code"] = 500
-#         return {"status": "error", "message": str(e)}
+    # 5. Process doc
+    data = frappe._dict(data)
+    if method == "after_insert":
+        if not frappe.db.exists(doctype, name):
+            doc = frappe.get_doc(data)
+            doc.insert(ignore_permissions=True)
+            frappe.rename_doc(doctype, doc.name, name, force=True)
+    elif method == "on_update":
+        if frappe.db.exists(doctype, name):
+            doc = frappe.get_doc(doctype, name)
+
+            # Exclude default/system fields
+            system_fields = [
+                "name", "owner", "creation", "modified", "modified_by",
+                "docstatus", "idx", "__unsaved"
+            ]
+
+            for key, value in data.items():
+                if key not in system_fields:
+                    setattr(doc, key, value)
+
+            doc.save(ignore_permissions=True)
+    elif method == "on_trash":
+        if frappe.db.exists(doctype, name):
+            frappe.delete_doc(doctype, name, ignore_permissions=True, force=True)
+
+    frappe.db.commit()
+    return {"status": "success", "method": method, "doctype": doctype, "name": name}
 
 
 @frappe.whitelist()
@@ -58,7 +64,7 @@ def setup_outgoing_client(client_name, redirect_uri):
     client.app_name = client_name
     client.client_type = "Confidential"
     client.default_redirect_uri = redirect_uri + "/api/method/frappe.integrations.doctype.connected_app.connected_app.callback/" + client_name
-    client.redirect_uris = redirect_uri
+    client.redirect_uris = redirect_uri + "/api/method/frappe.integrations.doctype.connected_app.connected_app.callback/" + client_name
     client.insert(ignore_permissions=True)
 
     settings = frappe.get_single("Sync Settings")
@@ -72,19 +78,33 @@ def setup_outgoing_client(client_name, redirect_uri):
     return {"status": "success", "client_id": client.client_id}
 
 @frappe.whitelist()
-def setup_incoming_connected_app(app_name, provider_url, client_id, client_secret):
-    """Create Connected App on this site and link to Sync Settings."""
+def setup_incoming_connected_app(app_name, provider_url, client_id, client_secret, redirect_uri=None):
+    """Create Connected App, rename it to a fixed name, and link to Sync Settings."""
+    forced_name = frappe.scrub(app_name)
+
+    # Step 1: Insert normally
     app = frappe.new_doc("Connected App")
-    settings = frappe.get_single("Sync Settings")
-    app.name = settings.incoming_connected_app
+    app.app_name = app_name
     app.provider_name = app_name
-    app.authorization_uri = provider_url + "/api/method/frappe.integrations.oauth2.authorize"
-    app.token_uri = provider_url + "/api/method/frappe.integrations.oauth2.get_token"
+    app.authorization_uri = provider_url.rstrip("/") + "/api/method/frappe.integrations.oauth2.authorize"
+    app.token_uri = provider_url.rstrip("/") + "/api/method/frappe.integrations.oauth2.get_token"
     app.client_id = client_id
     app.client_secret = client_secret
+    if redirect_uri and hasattr(app, "redirect_uri"):
+        app.redirect_uri = redirect_uri
     app.insert(ignore_permissions=True)
 
-    settings.outgoing_redirect_uri = app.redirect_uri
+    # Step 2: Rename to forced name
+    if app.name != forced_name:
+        frappe.rename_doc("Connected App", app.name, forced_name, force=True)
+        app = frappe.get_doc("Connected App", forced_name).save(ignore_permissions=True)
+
+    # Step 4: Update Sync Settings
+    settings = frappe.get_single("Sync Settings")
+    settings.outgoing_redirect_uri = provider_url
+    settings.incoming_connected_app = forced_name
     settings.save(ignore_permissions=True)
 
-    return {"status": "success", "connected_app": app.name}
+    frappe.db.commit()
+
+    return {"status": "success", "connected_app": forced_name}

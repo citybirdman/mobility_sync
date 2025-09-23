@@ -66,26 +66,34 @@ frappe.ui.form.on("Sync Settings", {
                     });
                 }, __("Create Connected App"), __("Create"));
             });
+
             if (frm.doc.incoming_connected_app) {
-            // fetch the Connected App doc to get its provider_name
-            frappe.db.get_doc("Connected App", frm.doc.incoming_connected_app)
-                .then(connected_app => {
-                    frm.add_custom_button(
-                        __("Connect to {0}", [connected_app.provider_name || connected_app.app_name]),
-                        () => {
-                            frappe.call({
-                                method: "initiate_web_application_flow",
-                                doc: connected_app,
-                                callback: (r) => {
-                                    if (r.message) {
-                                        window.open(r.message, "_blank");
-                                    }
+                frappe.db.exists("Connected App", frm.doc.incoming_connected_app).then(exists => {
+                    if (exists) {
+                        // Safe to fetch full doc
+                        frappe.db.get_doc("Connected App", frm.doc.incoming_connected_app).then(connected_app => {
+                            frm.add_custom_button(
+                                __("Connect to {0}", [connected_app.provider_name || connected_app.app_name]),
+                                () => {
+                                    frappe.call({
+                                        method: "frappe.integrations.doctype.connected_app.connected_app.initiate_web_application_flow",
+                                        args: {
+                                            doc: connected_app
+                                        },
+                                        callback: (r) => {
+                                            if (r.message) {
+                                                window.open(r.message, "_blank");
+                                            }
+                                        }
+                                    });
                                 }
-                            });
-                        }
-                    );
+                            );
+                        });
+                    }
                 });
             }
+
+
         }
     }
 });

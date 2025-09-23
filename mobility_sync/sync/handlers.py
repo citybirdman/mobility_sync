@@ -1,9 +1,21 @@
 import frappe
 import requests
+from frappe.utils import get_traceback, now_datetime
+from datetime import date, datetime, timedelta
 
 # --------------------------------------------------------
 # Utilities
 # --------------------------------------------------------
+
+def convert_dates(obj):
+    if isinstance(obj, dict):
+        return {k: convert_dates(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_dates(v) for v in obj]
+    elif isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    else:
+        return obj
 
 def is_doctype_enabled(doctype):
     """Check if given doctype is enabled in Sync Settings (child table)."""
@@ -19,52 +31,134 @@ def is_doctype_enabled(doctype):
 
 
 def get_oauth_tokens():
-    """Fetch or refresh tokens for the connected app."""
+    """
+    Return a valid access_token from the Token Cache (Connected App).
+    If expired, enqueue token refresh to avoid DB locks.
+    """
     settings = frappe.get_single("Sync Settings")
-    if not settings.connected_app or not settings.refresh_token:
-        frappe.throw("Sync Settings missing connected app or refresh token")
+    connected_app_name = settings.incoming_connected_app
 
-    connected_app = frappe.get_doc("Connected App", settings.connected_app)
+    token_cache_list = frappe.get_all(
+        "Token Cache",
+        filters={"connected_app": connected_app_name},
+        fields=["name", "access_token", "refresh_token", "expires_in", "creation"],
+        limit=1,
+        order_by="creation desc"
+    )
 
-    token_url = f"{connected_app.get('provider_url')}/api/method/frappe.integrations.oauth2.get_token"
+    if not token_cache_list:
+        return None
 
-    resp = requests.post(token_url, data={
-        "grant_type": "refresh_token",
-        "refresh_token": settings.refresh_token,
-        "client_id": connected_app.client_id,
-        "client_secret": connected_app.get_password("client_secret"),
-    })
+    token_doc = frappe.get_doc("Token Cache", token_cache_list[0].name)
+    expires_in = token_doc.expires_in or 0
+    created_at = token_doc.creation
 
-    if resp.status_code != 200:
-        frappe.throw(f"Failed to refresh token: {resp.text}")
+    # Check expiration
+    if expires_in and (datetime.now() > created_at + timedelta(seconds=expires_in)):
+        # Enqueue token refresh in separate transaction
+        frappe.enqueue(
+            "mobility_sync.sync.handlers.refresh_oauth_token",
+            connected_app_name=connected_app_name,
+            queue="long",
+            timeout=120
+        )
 
-    tokens = resp.json()
-    return tokens.get("access_token")
+    return token_doc.get_password("access_token")
 
 
-def push_to_remote(doc, method):
-    """Push changes of a document to the remote instance."""
+def refresh_oauth_token(connected_app_name):
+    """Refresh OAuth token in a separate transaction to avoid locks."""
+    retries = 3
+    while retries > 0:
+        try:
+            token_cache_list = frappe.get_all(
+                "Token Cache",
+                filters={"connected_app": connected_app_name},
+                fields=["name", "access_token", "refresh_token", "expires_in", "creation"],
+                limit=1,
+                order_by="creation desc"
+            )
+            if not token_cache_list:
+                return
+
+            token_doc = frappe.get_doc("Token Cache", token_cache_list[0].name)
+            refresh_token = token_doc.get_password("refresh_token")
+            if not refresh_token:
+                return
+
+            connected_app = frappe.get_doc("Connected App", connected_app_name)
+            refresh_url = connected_app.token_uri
+
+            resp = requests.post(refresh_url, data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": connected_app.client_id,
+                "client_secret": connected_app.client_secret,
+            }, timeout=30)
+
+            if resp.status_code != 200:
+                frappe.log_error(resp.text[:5000], "Token Refresh Failed")
+                return
+
+            tokens = resp.json()
+
+            # Update token cache without row locks
+            frappe.db.begin()
+            frappe.db.sql("""
+                UPDATE `tabToken Cache`
+                SET access_token=%s,
+                    refresh_token=COALESCE(%s, refresh_token),
+                    expires_in=COALESCE(%s, expires_in)
+                WHERE name=%s
+            """, (tokens.get("access_token"), tokens.get("refresh_token"),
+                  tokens.get("expires_in"), token_doc.name))
+            frappe.db.commit()
+            return
+
+        except Exception:
+            frappe.db.rollback()
+            retries -= 1
+            if retries == 0:
+                frappe.log_error(get_traceback()[:5000], "Token Refresh Failed After Retry")
+                return
+
+
+# --------------------------------------------------------
+# Sync Push
+# --------------------------------------------------------
+
+def push_to_remote(doc, doc_method):
+    """Push changes of a document to the remote instance asynchronously."""
     access_token = get_oauth_tokens()
+    if not access_token:
+        frappe.log_error("Access token not available", "Sync Push Failed")
+        return
+
     settings = frappe.get_single("Sync Settings")
-    connected_app = frappe.get_doc("Connected App", settings.connected_app)
+    target_url = settings.outgoing_redirect_uri.rstrip("/")
 
-    url = f"{connected_app.get('provider_url')}/api/method/mobility_sync.sync.api.receive_doc"
-
-    payload = {
-        "doctype": doc.doctype,
-        "name": doc.name,
-        "method": method,
-        "data": doc.as_dict()
-    }
+    url = f"{target_url}/api/method/mobility_sync.sync.api.receive_doc"
 
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json"
     }
 
-    resp = requests.post(url, json=payload, headers=headers)
-    if resp.status_code != 200:
-        frappe.log_error(resp.text, "Sync Push Failed")
+    payload = {
+        "doctype": doc.get("doctype"),
+        "name": doc.get("name"),
+        "doc_method": doc_method,
+        "data": convert_dates(doc)
+    }
+
+    try:
+        resp = requests.post(url, json=payload, headers=headers)
+        if resp.status_code != 200:
+            title = f"Sync Push Failed ({resp.status_code})"
+            content = resp.text[:5000]
+            frappe.log_error(content, title)
+    except Exception:
+        frappe.log_error(get_traceback()[:5000], "Sync Push Exception")
 
 
 # --------------------------------------------------------
@@ -75,5 +169,12 @@ def handle_doc_event(doc, method):
     """Hook entrypoint for doc_events"""
     if not is_doctype_enabled(doc.doctype):
         return
-
-    push_to_remote(doc, method)
+    # frappe.throw(str(doc.as_dict()))
+    # Enqueue push to remote to avoid DB locks
+    frappe.enqueue(
+        "mobility_sync.sync.handlers.push_to_remote",
+        doc=doc.as_dict(),
+        doc_method=method,
+        queue="long",
+        timeout=300
+    )
