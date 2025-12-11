@@ -76,10 +76,8 @@ frappe.ui.form.on("Sync Settings", {
                                 __("Connect to {0}", [connected_app.provider_name || connected_app.app_name]),
                                 () => {
                                     frappe.call({
-                                        method: "frappe.integrations.doctype.connected_app.connected_app.initiate_web_application_flow",
-                                        args: {
-                                            doc: connected_app
-                                        },
+                                        method: "initiate_web_application_flow",
+                                        doc: connected_app,
                                         callback: (r) => {
                                             if (r.message) {
                                                 window.open(r.message, "_blank");
@@ -95,5 +93,27 @@ frappe.ui.form.on("Sync Settings", {
 
 
         }
+    }
+});
+
+frappe.ui.form.on('Mobility Sync Field Mapping', {
+    document_type: function(frm, cdt, cdn) {
+        let row = locals[cdt][cdn];
+        if (!row.document_type) {
+            return;
+        }
+        let grid_row = frm.fields_dict['mapping'].grid.grid_rows_by_docname[row.name];
+        frappe.model.with_doctype(row.document_type, () => {
+            const fields = frappe.meta.get_docfields("Salary Slip").filter(f => {
+                // exclude layout fields
+                return !["Section Break", "Column Break", "Table", "HTML"].includes(f.fieldtype);
+            });
+            let valid_fields = fields.filter(df => !df.hidden && !df.system_generated && df.fieldname).map(df=>({
+                    label: df.label,
+                    value: df.fieldname
+                }));
+			grid_row.get_field("source_fieldname").set_data(valid_fields);
+
+        });
     }
 });

@@ -9,7 +9,8 @@
   "outgoing_client_id",
   "outgoing_client_secret",
   "outgoing_redirect_uri",
-  "incoming_connected_app"
+  "incoming_connected_app",
+  "mapping"
  ],
  "fields": [
   {
@@ -40,13 +41,19 @@
    "fieldtype": "Data",
    "label": "Outgoing Client Secret",
    "read_only": 1
+  },
+  {
+   "fieldname": "mapping",
+   "fieldtype": "Table",
+   "label": "Mapping",
+   "options": "Mobility Sync Field Mapping"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2025-09-22 22:37:52.540324",
+ "modified": "2025-10-26 18:00:49.603937",
  "modified_by": "Administrator",
  "module": "Mobility Sync",
  "name": "Sync Settings",

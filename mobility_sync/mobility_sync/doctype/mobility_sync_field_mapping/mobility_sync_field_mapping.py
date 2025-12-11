@@ -5,5 +5,5 @@
 from frappe.model.document import Document
 
 
-class SyncSettingsDetail(Document):
+class MobilitySyncFieldMapping(Document):
 	pass
