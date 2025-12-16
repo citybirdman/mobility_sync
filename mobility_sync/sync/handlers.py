@@ -167,8 +167,16 @@ def refresh_oauth_token(connected_app_name):
                 frappe.log_error(message = get_traceback(), title = "Token Refresh Failed After Retry")
                 return
 
-def update_queue_record(doc, app_name, success):
-    if queue_record_name := frappe.db.exists("Mobility Sync Failed Queue", {"document_type": doc.get("doctype"), "document_name": doc.get("name"), "app_name": app_name, "sync_tried": 0}):
+def update_queue_record(doc, app_name, success, doc_method="after_insert"):
+    if queue_record_name := frappe.db.exists(
+        "Mobility Sync Failed Queue", 
+        {
+            "document_type": doc.get("doctype"),
+            "document_name": doc.get("name"),
+            "app_name": app_name,
+            "doc_method": doc_method,
+            "sync_tried": 0
+        }):
         queue_doc = frappe.get_doc("Mobility Sync Failed Queue", queue_record_name)
     else:
         queue_doc = None
@@ -182,6 +190,7 @@ def update_queue_record(doc, app_name, success):
             "document_type": doc.get("doctype"),
             "document_name": doc.get("name"),
             "app_name": app_name,
+            "doc_method": doc_method,
             "sync_tried": 0,
             "retry_success": 0
         }).insert(ignore_permissions=True)
@@ -214,7 +223,7 @@ def push_to_remote(doc, doc_method, max_retries=1, retry_delay=5, app_name=None)
         access_token = get_oauth_tokens(app)
         if not access_token:
             frappe.log_error(f"Access token not available for app {app}", "Sync Push Failed")
-            update_queue_record(doc, app, False)
+            update_queue_record(doc, app, False, doc_method)
             time.sleep(retry_delay)
             continue
 
@@ -253,7 +262,7 @@ def push_to_remote(doc, doc_method, max_retries=1, retry_delay=5, app_name=None)
             if retries < max_retries:
                 time.sleep(retry_delay)  # Wait before next retry
         
-        update_queue_record(doc, app, success)
+        update_queue_record(doc, app, success, doc_method)
 
 
 
@@ -288,7 +297,7 @@ def handle_failed_queues():
         frappe.enqueue(
             "mobility_sync.sync.handlers.push_to_remote",
             doc=doc.as_dict(),
-            doc_method="on_update",
+            doc_method=queue.doc_method,
             app_name=queue.app_name,
             queue="long",
             timeout=300
