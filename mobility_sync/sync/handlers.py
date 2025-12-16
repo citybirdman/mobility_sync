@@ -182,9 +182,8 @@ def update_queue_record(doc, app_name, success, doc_method="after_insert"):
         queue_doc = None
     if not success:
         if queue_doc:
-            queue_doc.sync_tried = 1
-            queue_doc.retry_success = 0
-            queue_doc.save(ignore_permissions=True)
+            queue_doc.db_set("sync_tried", 1)
+            queue_doc.db_set("retry_success", 0)
         frappe.get_doc({
             "doctype": "Mobility Sync Failed Queue",
             "document_type": doc.get("doctype"),
@@ -196,9 +195,8 @@ def update_queue_record(doc, app_name, success, doc_method="after_insert"):
         }).insert(ignore_permissions=True)
     else:
         if queue_doc:
-            queue_doc.sync_tried = 1
-            queue_doc.retry_success = 1
-            queue_doc.save(ignore_permissions=True)
+            queue_doc.db_set("sync_tried", 1)
+            queue_doc.db_set("retry_success", 1)
     frappe.db.commit()
 
 # --------------------------------------------------------
@@ -288,15 +286,22 @@ def handle_failed_queues():
     failed_queues = frappe.get_all(
         "Mobility Sync Failed Queue",
         filters={"sync_tried": 0},
-        fields=["document_type", "document_name", "app_name"],
+        fields=["document_type", "document_name", "app_name", "doc_method"],
         limit=0
     )
 
     for queue in failed_queues:
-        doc = frappe.get_doc(queue.document_type, queue.document_name)
+        if frappe.db.exists(queue.document_type, queue.document_name):
+            doc = frappe.get_doc(queue.document_type, queue.document_name)
+            doc_dict = doc.as_dict()
+        else:
+            doc_dict = frappe._dict({
+                "doctype": queue.document_type,
+                "name": queue.document_name
+            })
         frappe.enqueue(
             "mobility_sync.sync.handlers.push_to_remote",
-            doc=doc.as_dict(),
+            doc=doc_dict,
             doc_method=queue.doc_method,
             app_name=queue.app_name,
             queue="long",
