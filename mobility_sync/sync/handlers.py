@@ -11,24 +11,9 @@ from frappe.utils.background_jobs import get_queue
 # Utilities
 # --------------------------------------------------------
 
-# def convert_properties(doc, mapping=None):
-#     """Convert document properties based on mapping rules."""
-#     if not mapping:
-#         return doc
-#     if not mapping.get("document_type") == doc.get("doctype"):
-#         return doc
-#     converted = doc.copy()
-#     for rule in mapping:
-#         source = rule.get("source_fieldname")
-#         target = rule.get("target_fieldname")
-#         exclude = rule.get("exclude")
-#         if exclude:
-#             converted.pop(source)
-#         if source in converted:
-#             converted[target] = converted.pop(source)
-#     return converted
-
-def convert_properties(doc, mapping=None):
+def convert_properties(doc):
+    mapping = frappe.get_all("Mobility Sync Field Mapping", {"document_type": doc.get("doctype")}, ["source_fieldname", "target_fieldname", "exclude"])
+    
     if not mapping:
         return doc
 
@@ -205,12 +190,13 @@ def update_queue_record(doc, app_name, success):
             queue_doc.sync_tried = 1
             queue_doc.retry_success = 1
             queue_doc.save(ignore_permissions=True)
+    frappe.db.commit()
 
 # --------------------------------------------------------
 # Sync Push
 # --------------------------------------------------------
 
-def push_to_remote(doc, doc_method, max_retries=3, retry_delay=5, app_name=None):
+def push_to_remote(doc, doc_method, max_retries=1, retry_delay=5, app_name=None):
     """Push changes of a document to the remote instance asynchronously with retry."""
     setting_name = frappe.db.get_value(
         "Sync Settings Detail",
@@ -229,9 +215,10 @@ def push_to_remote(doc, doc_method, max_retries=3, retry_delay=5, app_name=None)
         if not access_token:
             frappe.log_error(f"Access token not available for app {app}", "Sync Push Failed")
             update_queue_record(doc, app, False)
+            time.sleep(retry_delay)
             continue
 
-        target_url = settings.outgoing_redirect_uri.rstrip("/")
+        target_url = frappe.db.get_value("Sync Settings Apps", {"parent": "Sync Settings", "app_name": app}, "provider_url").rstrip("/")
         url = f"{target_url}/api/method/mobility_sync.sync.api.receive_doc"
 
         headers = {
@@ -239,7 +226,7 @@ def push_to_remote(doc, doc_method, max_retries=3, retry_delay=5, app_name=None)
             "Content-Type": "application/json"
         }
         data = convert_dates(doc)
-        data = convert_properties(data, settings.mapping)
+        data = convert_properties(data)
         payload = {
             "doctype": doc.get("doctype"),
             "name": doc.get("name"),

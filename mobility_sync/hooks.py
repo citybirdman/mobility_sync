@@ -148,7 +148,12 @@ doc_events = {
 # Scheduled Tasks
 # ---------------
 
-# scheduler_events = {
+scheduler_events = {
+    "cron": {
+        "*/5 * * * *": [
+            "mobility_sync.sync.handlers.handle_failed_queues"
+        ]
+    }
 # 	"all": [
 # 		"mobility_sync.tasks.all"
 # 	],
@@ -164,7 +169,7 @@ doc_events = {
 # 	"monthly": [
 # 		"mobility_sync.tasks.monthly"
 # 	],
-# }
+}
 
 # Testing
 # -------
