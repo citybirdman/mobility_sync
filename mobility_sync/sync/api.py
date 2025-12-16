@@ -33,7 +33,8 @@ def receive_doc(doctype, name, doc_method, data):
         if not frappe.db.exists(doctype, name):
             doc = frappe.get_doc(data)
             doc.insert(ignore_permissions=True)
-            frappe.rename_doc(doctype, doc.name, name, force=True)
+            if doc.name != name:
+                frappe.rename_doc(doctype, doc.name, name, force=True)
     elif method == "on_update":
         if frappe.db.exists(doctype, name):
             doc = frappe.get_doc(doctype, name)
@@ -60,11 +61,12 @@ def receive_doc(doctype, name, doc_method, data):
 @frappe.whitelist()
 def setup_outgoing_client(client_name, redirect_uri):
     """Create OAuth Client on this site and store credentials in Sync Settings."""
+    uris = redirect_uri.splitlines()
     client = frappe.new_doc("OAuth Client")
     client.app_name = client_name
     client.client_type = "Confidential"
-    client.default_redirect_uri = redirect_uri + "/api/method/frappe.integrations.doctype.connected_app.connected_app.callback/" + client_name
-    client.redirect_uris = redirect_uri + "/api/method/frappe.integrations.doctype.connected_app.connected_app.callback/" + client_name
+    client.default_redirect_uri = uris[0] + "/api/method/frappe.integrations.doctype.connected_app.connected_app.callback/" + client_name
+    client.redirect_uris = " ".join([redirect_uri + "/api/method/frappe.integrations.doctype.connected_app.connected_app.callback/" + client_name for redirect_uri in uris])
     client.insert(ignore_permissions=True)
 
     settings = frappe.get_single("Sync Settings")
@@ -81,9 +83,12 @@ def setup_outgoing_client(client_name, redirect_uri):
 def setup_incoming_connected_app(app_name, provider_url, client_id, client_secret, redirect_uri=None):
     """Create Connected App, rename it to a fixed name, and link to Sync Settings."""
     forced_name = frappe.scrub(app_name)
-
-    # Step 1: Insert normally
-    app = frappe.new_doc("Connected App")
+    app_exists = frappe.db.exists("Connected App", forced_name)
+    # Step 1: Get The App
+    if app_exists:
+        app = frappe.get_doc("Connected App", forced_name)
+    else:
+        app = frappe.new_doc("Connected App")
     app.app_name = app_name
     app.provider_name = app_name
     app.authorization_uri = provider_url.rstrip("/") + "/api/method/frappe.integrations.oauth2.authorize"
@@ -92,7 +97,10 @@ def setup_incoming_connected_app(app_name, provider_url, client_id, client_secre
     app.client_secret = client_secret
     if redirect_uri and hasattr(app, "redirect_uri"):
         app.redirect_uri = redirect_uri
-    app.insert(ignore_permissions=True)
+    if app_exists:
+        app.save(ignore_permissions=True)
+    else:
+        app.insert(ignore_permissions=True)
 
     # Step 2: Rename to forced name
     if app.name != forced_name:
@@ -101,9 +109,26 @@ def setup_incoming_connected_app(app_name, provider_url, client_id, client_secre
 
     # Step 4: Update Sync Settings
     settings = frappe.get_single("Sync Settings")
-    settings.outgoing_redirect_uri = provider_url
-    settings.incoming_connected_app = forced_name
-    settings.save(ignore_permissions=True)
+    row = next((r for r in settings.apps if r.app_name == forced_name), None)
+    if row:
+        # update existing row
+        row.provider_url = provider_url
+        row.client_id = app.client_id
+        row.client_secret = app.client_secret
+    else:
+        # add new row
+        settings.append("apps", {
+            "provider_url": provider_url,
+            "app_name": forced_name,
+            "client_id": app.client_id,
+            "client_secret": app.client_secret,
+        })
+    # settings.outgoing_redirect_uri = provider_url
+    # settings.incoming_connected_app = forced_name
+    settings.flags.ignore_links = True
+    settings.flags.ignore_validate = True
+    settings.flags.ignore_links = True
+    settings.save()
 
     frappe.db.commit()
 

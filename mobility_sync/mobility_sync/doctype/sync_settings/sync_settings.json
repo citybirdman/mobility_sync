@@ -5,6 +5,7 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "apps",
   "doctypes",
   "outgoing_client_id",
   "outgoing_client_secret",
@@ -47,13 +48,19 @@
    "fieldtype": "Table",
    "label": "Mapping",
    "options": "Mobility Sync Field Mapping"
+  },
+  {
+   "fieldname": "apps",
+   "fieldtype": "Table",
+   "label": "Apps",
+   "options": "Sync Settings Apps"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2025-10-26 18:00:49.603937",
+ "modified": "2025-12-15 13:10:34.048848",
  "modified_by": "Administrator",
  "module": "Mobility Sync",
  "name": "Sync Settings",
