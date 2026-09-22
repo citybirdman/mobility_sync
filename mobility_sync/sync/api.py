@@ -45,9 +45,14 @@ def receive_doc(doctype, name, doc_method, data):
                 "docstatus", "idx", "__unsaved"
             ]
 
+            doc_data = {}
             for key, value in data.items():
                 if key not in system_fields:
-                    setattr(doc, key, value)
+                    doc_data[key] = value
+
+            # Use Frappe's update method instead of setattr
+            # This safely converts dicts into child Document objects
+            doc.update(doc_data)
 
             doc.save(ignore_permissions=True)
     elif method == "on_trash":

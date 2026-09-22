@@ -46,6 +46,36 @@ def convert_dates(obj):
     else:
         return obj
 
+def sanitize_data(data):
+    converted_date_data = convert_dates(data)
+    converted_properties_data = convert_properties(converted_date_data)
+    system_fields = [
+        "name", "owner", "creation", "modified", "modified_by",
+        "docstatus", "idx", "__unsaved", "parent", "parentfield", "parenttype"
+    ]
+    clean_data = {}
+    for key, value in converted_properties_data.items():
+        # 1. Skip system fields on the parent document
+        if key in system_fields:
+            continue
+        
+        # 2. Check if the value is a child table (a list)
+        if isinstance(value, list):
+            clean_child_table = []
+            for row in value:
+                if isinstance(row, dict):
+                    # Remove system fields from the child row dictionary
+                    clean_row = {k: v for k, v in row.items() if k not in system_fields}
+                    clean_child_table.append(clean_row)
+                else:
+                    clean_child_table.append(row)
+                    
+            clean_data[key] = clean_child_table
+        
+        # 3. Standard fields
+        else:
+            clean_data[key] = value
+    return clean_data
 def is_doctype_enabled(doctype):
     """Check if given doctype is enabled in Sync Settings (child table)."""
     try:
@@ -232,8 +262,7 @@ def push_to_remote(doc, doc_method, max_retries=1, retry_delay=5, app_name=None)
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json"
         }
-        data = convert_dates(doc)
-        data = convert_properties(data)
+        data = sanitize_data(doc)
         payload = {
             "doctype": doc.get("doctype"),
             "name": doc.get("name"),
